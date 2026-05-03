@@ -12112,15 +12112,6 @@ function isSurrogatePair(str) {
     let a = str.charCodeAt(0), b = str.charCodeAt(1);
     return a >= 0xDC00 && a <= 0xDFFF && b >= 0xD800 && b <= 0xDBFF;
 }
-
-/**
-@internal
-*/
-const __parseFromClipboard = parseFromClipboard;
-/**
-@internal
-*/
-const __endComposition = endComposition;
 /**
 An editor view manages the DOM structure that represents an
 editable document. Its state and behavior are determined by its
@@ -12696,15 +12687,6 @@ function checkStateComponent(plugin) {
     if (plugin.spec.state || plugin.spec.filterTransaction || plugin.spec.appendTransaction)
         throw new RangeError("Plugins passed directly to the view must not have a state component");
 }
-
-var view$1 = /*#__PURE__*/Object.freeze({
-  __proto__: null,
-  Decoration: Decoration,
-  DecorationSet: DecorationSet,
-  EditorView: EditorView,
-  __endComposition: __endComposition,
-  __parseFromClipboard: __parseFromClipboard
-});
 
 var GOOD_LEAF_SIZE = 200;
 
@@ -60272,7 +60254,7 @@ if (hash && hash.length > 1) {
       const msg = JSON.parse(event.data);
       if (msg.type === 'update') {
         // Replace the current document with the update.
-        handleContents(view$1, schema, msg.content, 'markdown');
+        handleContents(window.view, schema, msg.content, 'markdown');
       }
     });
   } else {

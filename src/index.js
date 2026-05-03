@@ -139,7 +139,7 @@ if (hash && hash.length > 1) {
       const msg = JSON.parse(event.data)
       if (msg.type === 'update') {
         // Replace the current document with the update.
-        handleContents(view, schema, msg.content, 'markdown')
+        handleContents(window.view, schema, msg.content, 'markdown')
       }
     })
   } else {
