@@ -21,6 +21,7 @@ import { CalcView, TexView, FootnoteView } from "./nodeviews"
 import { DataFrame } from "./dataframe"
 import hurmet from "./hurmet"
 import { formatFloat as round } from "./format.js"
+import { handleContents } from "./openfile"
 
 if (typeof window !== "undefined") {
   window.hurmet = { round } // Expose for use by sketch module.
@@ -129,6 +130,16 @@ if (hash && hash.length > 1) {
   const anchor = document.getElementById(hash)
   if (anchor) {
     anchor.scrollIntoView({ behavior: 'smooth' })
+  } else if (/^\d+$/.test(hash)) {
+    // Open a websocket and listen for updates.
+    const socket = new WebSocket(`ws://localhost:${hash}`)
+    socket.addEventListener('message', event => {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'update') {
+        // Replace the current document with the update.
+        handleContents(view, schema, msg.content, 'markdown')
+      }
+    })
   } else {
     const md = decodeURIComponent(hash)
     const ast = hurmet.md2ast(md)
