@@ -24,9 +24,7 @@
     "README.md",
     "LICENSE"
   ],
-  "bin": {
-    "hurmet": "./dist/hurmet-cli.cjs"
-  },
+  "bin": "./dist/hurmet-cli.cjs",
   "dependencies": {
     "filesaver.js-npm": "^1.0.1",
     "prosemirror-commands": "^1.7.1",
@@ -36,21 +34,27 @@
     "prosemirror-inputrules": "^1.5.1",
     "prosemirror-keymap": "^1.2.3",
     "prosemirror-menu": "^1.3.2",
-    "prosemirror-model": "^1.25.7",
-    "prosemirror-state": "^1.4.4",
+    "prosemirror-model": "1.25.9",
+    "prosemirror-state": "1.4.4",
     "prosemirror-tables": "^1.8.5",
-    "prosemirror-transform": "^1.12.0",
-    "prosemirror-view": "^1.41.8",
+    "prosemirror-transform": "1.12.0",
+    "prosemirror-view": "1.41.9",
     "ws": "^8.21.0"
+  },
+  "resolutions": {
+    "prosemirror-model": "1.25.9",
+    "prosemirror-state": "1.4.4",
+    "prosemirror-transform": "1.12.0",
+    "prosemirror-view": "1.41.9"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
     "@eslint/js": "^10.0.1",
     "@rollup/plugin-commonjs": "^29.0.3",
     "@rollup/plugin-node-resolve": "^16.0.3",
-    "eslint": "^10.4.1",
-    "globals": "^17.6.0",
-    "rollup": "^4.61.0",
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0",
+    "rollup": "^4.62.2",
     "terser": "^5.48.0"
   },
   "scripts": {
@@ -69,7 +73,8 @@
     "test": "yarn test:lint && node test/test.cjs",
     "test:lint": "eslint src",
     "test:unit": "node test/test.cjs",
-    "reset": "node utils/reset-and-upgrade-all.cjs",
-    "prepack": "yarn build"
+    "clean": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue; Remove-Item -Force package-lock.json,yarn.lock -ErrorAction SilentlyContinue\"",
+    "reinstall": "corepack yarn clean && corepack yarn install",
+    "reset": "corepack yarn reinstall && node utils/reset-and-upgrade-all.cjs"
   }
 }

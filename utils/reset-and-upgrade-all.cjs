@@ -7,6 +7,13 @@ const { spawnSync } = require('child_process');
 const rootDir = path.resolve(__dirname, '..');
 const packageJsonPath = path.join(rootDir, 'package.json');
 
+const pinnedSingletons = new Set([
+  'prosemirror-model',
+  'prosemirror-state',
+  'prosemirror-transform',
+  'prosemirror-view'
+]);
+
 function bin(name) {
   return process.platform === 'win32' ? `${name}.cmd` : name;
 }
@@ -57,106 +64,42 @@ async function getLatestVersion(packageName) {
   return data.version;
 }
 
-function removeIfPresent(targetPath) {
-  fs.rmSync(targetPath, { recursive: true, force: true });
+function specFor(packageName, version) {
+  return pinnedSingletons.has(packageName) ? version : `^${version}`;
 }
 
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function findObjectRange(source, key) {
-  const keyPattern = new RegExp(`"${escapeRegExp(key)}"\\s*:\\s*\\{`, 'g');
-  const match = keyPattern.exec(source);
-
-  if (!match) {
-    return null;
-  }
-
-  const openBraceIndex = source.indexOf('{', match.index);
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = openBraceIndex; i < source.length; i += 1) {
-    const ch = source[i];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === '\\') {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-
-    if (ch === '{') {
-      depth += 1;
-      continue;
-    }
-
-    if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        return { start: openBraceIndex, end: i };
-      }
-    }
-  }
-
-  throw new Error(`Unable to locate end of "${key}" object.`);
-}
-
-function replaceVersionInSection(source, sectionName, packageName, versionSpec) {
-  const range = findObjectRange(source, sectionName);
-  if (!range) {
-    return source;
-  }
-
-  const before = source.slice(0, range.start + 1);
-  const sectionBody = source.slice(range.start + 1, range.end);
-  const after = source.slice(range.end);
-
-  const pattern = new RegExp(
-    `(\\r?\\n[\\t ]*"${escapeRegExp(packageName)}"\\s*:\\s*")([^"]*)(")`,
-    'm'
-  );
-
-  if (!pattern.test(sectionBody)) {
-    throw new Error(`Package "${packageName}" not found in "${sectionName}".`);
-  }
-
-  const updatedBody = sectionBody.replace(pattern, `$1^${versionSpec}$3`);
-  return before + updatedBody + after;
+function exactVersion(spec) {
+  return spec.replace(/^[~^]/, '');
 }
 
 async function main() {
-  const packageJsonObject = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
-  let packageJsonText = fs.readFileSync(packageJsonPath, 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  packageJson.resolutions ||= {};
 
-  for (const name of Object.keys(packageJsonObject.dependencies || {})) {
-    const version = await getLatestVersion(name);
-    console.log(`Setting dependency ${name} -> ^${version}`);
-    packageJsonText = replaceVersionInSection(packageJsonText, 'dependencies', name, version);
+  for (const sectionName of ['dependencies', 'devDependencies']) {
+    for (const name of Object.keys(packageJson[sectionName] || {})) {
+      const version = await getLatestVersion(name);
+      const spec = specFor(name, version);
+      console.log(`Setting ${sectionName}.${name} -> ${spec}`);
+      packageJson[sectionName][name] = spec;
+    }
   }
 
-  for (const name of Object.keys(packageJsonObject.devDependencies || {})) {
-    const version = await getLatestVersion(name);
-    console.log(`Setting devDependency ${name} -> ^${version}`);
-    packageJsonText = replaceVersionInSection(packageJsonText, 'devDependencies', name, version);
+  for (const name of pinnedSingletons) {
+    const spec = packageJson.dependencies?.[name] || packageJson.devDependencies?.[name];
+    if (spec) {
+      packageJson.resolutions[name] = exactVersion(spec);
+      console.log(`Setting resolutions.${name} -> ${packageJson.resolutions[name]}`);
+    }
   }
 
-  JSON.parse(packageJsonText);
-  fs.writeFileSync(packageJsonPath, packageJsonText, 'utf8');
+  fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8');
 
   console.log('Running yarn install...');
   runYarn(['install']);
+
+  console.log('Running yarn dedupe...');
+  runYarn(['dedupe', '--strategy', 'highest']);
 }
 
 main().catch((err) => {

@@ -146,8 +146,11 @@ function findDiffStart(a, b, pos) {
         if (!childA.sameMarkup(childB))
             return pos;
         if (childA.isText && childA.text != childB.text) {
-            for (let j = 0; childA.text[j] == childB.text[j]; j++)
+            let tA = childA.text, tB = childB.text, j = 0;
+            for (; tA[j] == tB[j]; j++)
                 pos++;
+            if (j && j < tA.length && j < tB.length && surrogateHigh(tA.charCodeAt(j - 1)) && surrogateLow(tA.charCodeAt(j)))
+                pos--;
             return pos;
         }
         if (childA.content.size || childB.content.size) {
@@ -171,11 +174,16 @@ function findDiffEnd(a, b, posA, posB) {
         if (!childA.sameMarkup(childB))
             return { a: posA, b: posB };
         if (childA.isText && childA.text != childB.text) {
-            let same = 0, minSize = Math.min(childA.text.length, childB.text.length);
-            while (same < minSize && childA.text[childA.text.length - same - 1] == childB.text[childB.text.length - same - 1]) {
-                same++;
+            let tA = childA.text, tB = childB.text, iA = tA.length, iB = tB.length;
+            while (iA > 0 && iB > 0 && tA[iA - 1] == tB[iB - 1]) {
+                iA--;
+                iB--;
                 posA--;
                 posB--;
+            }
+            if (iA && iB && iA < tA.length && surrogateHigh(tA.charCodeAt(iA - 1)) && surrogateLow(tA.charCodeAt(iA))) {
+                posA++;
+                posB++;
             }
             return { a: posA, b: posB };
         }
@@ -188,6 +196,8 @@ function findDiffEnd(a, b, posA, posB) {
         posB -= size;
     }
 }
+function surrogateLow(ch) { return ch >= 0xDC00 && ch < 0xE000; }
+function surrogateHigh(ch) { return ch >= 0xD800 && ch < 0xDC00; }
 
 /**
 A fragment represents a node's collection of child nodes.
@@ -868,7 +878,8 @@ function addRange($start, $end, depth, target) {
         addNode($end.nodeBefore, target);
 }
 function close$1(node, content) {
-    node.type.checkContent(content);
+    if (!node.type.validContent(content))
+        throw new ReplaceError("Invalid content for node " + node.type.name);
     return node.copy(content);
 }
 function replaceThreeWay($from, $start, $end, $to, depth) {
@@ -2179,13 +2190,12 @@ function computeAttrs(attrs, value) {
     return built;
 }
 function checkAttrs(attrs, values, type, name) {
-    for (let name in values)
-        if (!(name in attrs))
-            throw new RangeError(`Unsupported attribute ${name} for ${type} of type ${name}`);
-    for (let name in attrs) {
-        let attr = attrs[name];
-        if (attr.validate)
-            attr.validate(values[name]);
+    for (let attr in values)
+        if (!(attr in attrs))
+            throw new RangeError(`Unsupported attribute ${attr} for ${type} of type ${name}`);
+    for (let attr in attrs) {
+        if (attrs[attr].validate)
+            attrs[attr].validate(values[attr]);
     }
 }
 function initAttrs(typeName, attrs) {
@@ -9039,14 +9049,14 @@ function selectionToDOM(view, force = false) {
     syncNodeSelection(view, sel);
     if (!editorOwnsSelection(view))
         return;
-    // The delayed drag selection causes issues with Cell Selections
-    // in Safari. And the drag selection delay is to workarond issues
-    // which only present in Chrome.
-    if (!force && view.input.mouseDown && view.input.mouseDown.allowDefault && chrome) {
+    // Need to delay selection normalization during a native selection
+    // drag on Chrome, or it will cause further dragging to glitch.
+    let mouseDown = view.input.mouseDown;
+    if (!force && chrome && mouseDown) {
         let domSel = view.domSelectionRange(), curSel = view.domObserver.currentSelection;
         if (domSel.anchorNode && curSel.anchorNode &&
-            isEquivalentPosition(domSel.anchorNode, domSel.anchorOffset, curSel.anchorNode, curSel.anchorOffset)) {
-            view.input.mouseDown.delayedSelectionSync = true;
+            isEquivalentPosition(domSel.anchorNode, domSel.anchorOffset, curSel.anchorNode, curSel.anchorOffset) &&
+            mouseDown.delaySelUpdate()) {
             view.domObserver.setCurSelection();
             return;
         }
@@ -9898,6 +9908,8 @@ function setSelectionOrigin(view, origin) {
     view.input.lastSelectionTime = Date.now();
 }
 function destroyInput(view) {
+    if (view.input.mouseDown)
+        view.input.mouseDown.done();
     view.domObserver.stop();
     for (let type in view.input.eventHandlers)
         view.dom.removeEventListener(type, view.input.eventHandlers[type]);
@@ -9936,7 +9948,7 @@ function dispatchEvent(view, event) {
 editHandlers.keydown = (view, _event) => {
     let event = _event;
     view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
-    if (inOrNearComposition(view, event))
+    if (inOrNearComposition(view))
         return;
     view.input.lastKeyCode = event.keyCode;
     view.input.lastKeyCodeTime = Date.now();
@@ -9974,7 +9986,7 @@ editHandlers.keyup = (view, event) => {
 };
 editHandlers.keypress = (view, _event) => {
     let event = _event;
-    if (inOrNearComposition(view, event) || !event.charCode ||
+    if (inOrNearComposition(view) || !event.charCode ||
         event.ctrlKey && !event.altKey || mac$4 && event.metaKey)
         return;
     if (view.someProp("handleKeyPress", f => f(view, event))) {
@@ -10068,26 +10080,28 @@ function handleTripleClick$1(view, pos, inside, event) {
 function defaultTripleClick(view, inside, event) {
     if (event.button != 0)
         return false;
-    let doc = view.state.doc;
-    if (inside == -1) {
-        if (doc.inlineContent) {
-            updateSelection(view, TextSelection.create(doc, 0, doc.content.size));
-            return true;
-        }
+    let selection = selectionForTripleClick(view, inside, true), doc = view.state.doc;
+    if (!selection)
         return false;
-    }
+    updateSelection(view, selection);
+    if (selection instanceof TextSelection && doc.eq(view.state.doc))
+        view.input.mouseDown = new TripleClickDrag(view, selection);
+    return true;
+}
+function selectionForTripleClick(view, inside, selectNodes) {
+    let doc = view.state.doc;
+    if (inside == -1)
+        return doc.inlineContent ? TextSelection.create(doc, 0, doc.content.size) : null;
     let $pos = doc.resolve(inside);
     for (let i = $pos.depth + 1; i > 0; i--) {
         let node = i > $pos.depth ? $pos.nodeAfter : $pos.node(i);
         let nodePos = $pos.before(i);
         if (node.inlineContent)
-            updateSelection(view, TextSelection.create(doc, nodePos + 1, nodePos + 1 + node.content.size));
-        else if (NodeSelection.isSelectable(node))
-            updateSelection(view, NodeSelection.create(doc, nodePos));
-        else
-            continue;
-        return true;
+            return TextSelection.create(doc, nodePos + 1, nodePos + 1 + node.content.size);
+        else if (selectNodes && NodeSelection.isSelectable(node))
+            return NodeSelection.create(doc, nodePos);
     }
+    return null;
 }
 function forceDOMFlush(view) {
     return endComposition(view);
@@ -10106,13 +10120,13 @@ handlers.mousedown = (view, _event) => {
             type = "tripleClick";
     }
     view.input.lastClick = { time: now, x: event.clientX, y: event.clientY, type, button: event.button };
+    if (view.input.mouseDown)
+        view.input.mouseDown.done();
     let pos = view.posAtCoords(eventCoords(event));
     if (!pos)
         return;
     if (type == "singleClick") {
-        if (view.input.mouseDown)
-            view.input.mouseDown.done();
-        view.input.mouseDown = new MouseDown(view, pos, event, !!flushed);
+        view.input.mouseDown = new LeftMouseDown(view, pos, event, !!flushed);
     }
     else if ((type == "doubleClick" ? handleDoubleClick : handleTripleClick$1)(view, pos.pos, pos.inside, event)) {
         event.preventDefault();
@@ -10122,13 +10136,34 @@ handlers.mousedown = (view, _event) => {
     }
 };
 class MouseDown {
-    constructor(view, pos, event, flushed) {
+    constructor(view) {
         this.view = view;
+        this.mightDrag = null;
+        view.root.addEventListener("mouseup", this.up = this.up.bind(this));
+        view.root.addEventListener("mousemove", this.move = this.move.bind(this));
+    }
+    up(event) {
+        this.done();
+    }
+    move(event) {
+        if (event.buttons == 0)
+            this.done();
+    }
+    done() {
+        this.view.root.removeEventListener("mouseup", this.up);
+        this.view.root.removeEventListener("mousemove", this.move);
+        if (this.view.input.mouseDown == this)
+            this.view.input.mouseDown = null;
+    }
+    delaySelUpdate() { return false; }
+}
+class LeftMouseDown extends MouseDown {
+    constructor(view, pos, event, flushed) {
+        super(view);
         this.pos = pos;
         this.event = event;
         this.flushed = flushed;
         this.delayedSelectionSync = false;
-        this.mightDrag = null;
         this.startDoc = view.state.doc;
         this.selectNode = !!event[selectNodeModifier];
         this.allowDefault = event.shiftKey;
@@ -10166,13 +10201,10 @@ class MouseDown {
                 }, 20);
             this.view.domObserver.start();
         }
-        view.root.addEventListener("mouseup", this.up = this.up.bind(this));
-        view.root.addEventListener("mousemove", this.move = this.move.bind(this));
         setSelectionOrigin(view, "pointer");
     }
     done() {
-        this.view.root.removeEventListener("mouseup", this.up);
-        this.view.root.removeEventListener("mousemove", this.move);
+        super.done();
         if (this.mightDrag && this.target) {
             this.view.domObserver.stop();
             if (this.mightDrag.addAttr)
@@ -10182,8 +10214,10 @@ class MouseDown {
             this.view.domObserver.start();
         }
         if (this.delayedSelectionSync)
-            setTimeout(() => selectionToDOM(this.view));
-        this.view.input.mouseDown = null;
+            setTimeout(() => {
+                if (!this.view.isDestroyed)
+                    selectionToDOM(this.view);
+            });
     }
     up(event) {
         this.done();
@@ -10222,13 +10256,40 @@ class MouseDown {
     move(event) {
         this.updateAllowDefault(event);
         setSelectionOrigin(this.view, "pointer");
-        if (event.buttons == 0)
-            this.done();
+        super.move(event);
     }
     updateAllowDefault(event) {
         if (!this.allowDefault && (Math.abs(this.event.x - event.clientX) > 4 ||
             Math.abs(this.event.y - event.clientY) > 4))
             this.allowDefault = true;
+    }
+    delaySelUpdate() {
+        if (!this.allowDefault)
+            return false;
+        this.delayedSelectionSync = true;
+        return true;
+    }
+}
+class TripleClickDrag extends MouseDown {
+    constructor(view, startSelection) {
+        super(view);
+        this.startSelection = startSelection;
+        this.startDoc = view.state.doc;
+    }
+    move(event) {
+        if (event.buttons == 0 || this.view.isDestroyed || !this.view.state.doc.eq(this.startDoc)) {
+            this.done();
+            return;
+        }
+        event.preventDefault();
+        setSelectionOrigin(this.view, "pointer");
+        let pos = this.view.posAtCoords(eventCoords(event));
+        let target = pos && selectionForTripleClick(this.view, pos.inside, false);
+        if (!target)
+            return;
+        let { doc } = this.view.state, start = this.startSelection;
+        let [anchor, head] = target.from < start.from ? [start.to, target.from] : [start.from, target.to];
+        updateSelection(this.view, TextSelection.create(doc, anchor, head));
     }
 }
 handlers.touchstart = view => {
@@ -10254,7 +10315,7 @@ function inOrNearComposition(view, event) {
     // This guards against the case where compositionend is triggered without the keyboard
     // (e.g. character confirmation may be done with the mouse), and keydown is triggered
     // afterwards- we wouldn't want to ignore the keydown event in this case.
-    if (safari && Math.abs(event.timeStamp - view.input.compositionEndedAt) < 500) {
+    if (safari && Math.abs(Date.now() - view.input.compositionEndedAt) < 500) {
         view.input.compositionEndedAt = -2e8;
         return true;
     }
@@ -10313,7 +10374,7 @@ function selectionBeforeUneditable(view) {
 editHandlers.compositionend = (view, event) => {
     if (view.composing) {
         view.input.composing = false;
-        view.input.compositionEndedAt = event.timeStamp;
+        view.input.compositionEndedAt = Date.now();
         view.input.compositionPendingChanges = view.domObserver.pendingRecords().length ? view.input.compositionID : 0;
         view.input.compositionNode = null;
         if (view.input.badSafariComposition)
@@ -10332,7 +10393,7 @@ function scheduleComposeEnd(view, delay) {
 function clearComposition(view) {
     if (view.composing) {
         view.input.composing = false;
-        view.input.compositionEndedAt = timestampFromCustomEvent();
+        view.input.compositionEndedAt = Date.now();
     }
     while (view.input.compositionNodes.length > 0)
         view.input.compositionNodes.pop().markParentsDirty();
@@ -10357,11 +10418,6 @@ function findCompositionNode(view) {
         }
     }
     return textBefore || textAfter;
-}
-function timestampFromCustomEvent() {
-    let event = document.createEvent("Event");
-    event.initEvent("event", true, true);
-    return event.timeStamp;
 }
 /**
 @internal
@@ -11520,7 +11576,10 @@ class DOMObserver {
                 }
             }
         }
-        if (added.some(n => n.nodeName == "BR") && (view.input.lastKeyCode == 8 || view.input.lastKeyCode == 46)) {
+        if (added.some(n => n.nodeName == "BR") &&
+            (view.input.lastKeyCode == 8 || view.input.lastKeyCode == 46 ||
+                chrome && (view.composing || view.input.compositionEndedAt > Date.now() - 50) &&
+                    mutations.some(m => m.type == "childList" && m.removedNodes.length))) {
             // Browsers sometimes insert a bogus break node if you
             // backspace out the last bit of text before an inline-flex node (#1552)
             for (let node of added)
@@ -12076,37 +12135,27 @@ function skipClosingAndOpening($pos, fromEnd, mayOpen) {
     return end;
 }
 function findDiff(a, b, pos, preferredPos, preferredSide) {
-    let start = a.findDiffStart(b, pos);
+    let start = a.findDiffStart(b, pos), lenA = pos + a.size, lenB = pos + b.size;
     if (start == null)
         return null;
-    let { a: endA, b: endB } = a.findDiffEnd(b, pos + a.size, pos + b.size);
+    let { a: endA, b: endB } = a.findDiffEnd(b, lenA, lenB);
     if (preferredSide == "end") {
         let adjust = Math.max(0, start - Math.min(endA, endB));
         preferredPos -= endA + adjust - start;
     }
-    if (endA < start && a.size < b.size) {
+    if (endA < start && lenA < lenB) {
         let move = preferredPos <= start && preferredPos >= endA ? start - preferredPos : 0;
         start -= move;
-        if (start && start < b.size && isSurrogatePair(b.textBetween(start - 1, start + 1)))
-            start += move ? 1 : -1;
         endB = start + (endB - endA);
         endA = start;
     }
     else if (endB < start) {
         let move = preferredPos <= start && preferredPos >= endB ? start - preferredPos : 0;
         start -= move;
-        if (start && start < a.size && isSurrogatePair(a.textBetween(start - 1, start + 1)))
-            start += move ? 1 : -1;
         endA = start + (endA - endB);
         endB = start;
     }
     return { start, endA, endB };
-}
-function isSurrogatePair(str) {
-    if (str.length != 2)
-        return false;
-    let a = str.charCodeAt(0), b = str.charCodeAt(1);
-    return a >= 0xDC00 && a <= 0xDFFF && b >= 0xD800 && b <= 0xDBFF;
 }
 /**
 An editor view manages the DOM structure that represents an
@@ -12299,9 +12348,10 @@ class EditorView {
             // a DOM selection change and the "selectionchange" event for it
             // can cause a spurious DOM selection update, disrupting mouse
             // drag selection.
+            let mouseDown = this.input.mouseDown;
             if (forceSelUpdate ||
-                !(this.input.mouseDown && this.domObserver.currentSelection.eq(this.domSelectionRange()) &&
-                    anchorInRightPlace(this))) {
+                !(mouseDown && this.domObserver.currentSelection.eq(this.domSelectionRange()) &&
+                    anchorInRightPlace(this) && mouseDown.delaySelUpdate())) {
                 selectionToDOM(this, forceSelUpdate);
             }
             else {
@@ -54689,6 +54739,7 @@ async function updateAndSave(md) {
     ast.attrs.snapshotPathCache
   );
 
+  /* eslint-disable max-len */
   let updatedMarkdown = `---------------
 decimalFormat: ${ast.attrs.decimalFormat}
 fontSize: ${ast.attrs.fontSize}
@@ -54698,6 +54749,7 @@ saveDate: ${new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60 
 ---------------
 
 ${savedPathData.body}`;
+  /* eslint-enable max-len */
 
   const pathDefText = stringifyMarkdownPathDefinitions(savedPathData.pathDefs);
   if (pathDefText.length > 0) {
@@ -54706,7 +54758,8 @@ ${savedPathData.body}`;
 
   // updateDoc.js cannot rebuild fallback data because it has no state.doc traversal.
   for (const snapshot of savedPathData.snapshots) {
-    updatedMarkdown += `\n\n<!--SNAPSHOT-->\ndate: ${snapshot.date}\nmessage: ${snapshot.message}\n\n`;
+    updatedMarkdown +=
+      `\n\n<!--SNAPSHOT-->\ndate: ${snapshot.date}\nmessage: ${snapshot.message}\n\n`;
     updatedMarkdown += snapshot.content;
   }
 
@@ -54743,7 +54796,7 @@ var hurmet = {
   updateCalculations,
   updateAndSave,
   Rnl,
-  version: "0.1.0"
+  version: "0.1.1"
 };
 
 function draftMode(state, dispatch, calcNode) {

@@ -20713,8 +20713,11 @@ function findDiffStart(a, b, pos) {
         if (!childA.sameMarkup(childB))
             return pos;
         if (childA.isText && childA.text != childB.text) {
-            for (let j = 0; childA.text[j] == childB.text[j]; j++)
+            let tA = childA.text, tB = childB.text, j = 0;
+            for (; tA[j] == tB[j]; j++)
                 pos++;
+            if (j && j < tA.length && j < tB.length && surrogateHigh(tA.charCodeAt(j - 1)) && surrogateLow(tA.charCodeAt(j)))
+                pos--;
             return pos;
         }
         if (childA.content.size || childB.content.size) {
@@ -20738,11 +20741,16 @@ function findDiffEnd(a, b, posA, posB) {
         if (!childA.sameMarkup(childB))
             return { a: posA, b: posB };
         if (childA.isText && childA.text != childB.text) {
-            let same = 0, minSize = Math.min(childA.text.length, childB.text.length);
-            while (same < minSize && childA.text[childA.text.length - same - 1] == childB.text[childB.text.length - same - 1]) {
-                same++;
+            let tA = childA.text, tB = childB.text, iA = tA.length, iB = tB.length;
+            while (iA > 0 && iB > 0 && tA[iA - 1] == tB[iB - 1]) {
+                iA--;
+                iB--;
                 posA--;
                 posB--;
+            }
+            if (iA && iB && iA < tA.length && surrogateHigh(tA.charCodeAt(iA - 1)) && surrogateLow(tA.charCodeAt(iA))) {
+                posA++;
+                posB++;
             }
             return { a: posA, b: posB };
         }
@@ -20755,6 +20763,8 @@ function findDiffEnd(a, b, posA, posB) {
         posB -= size;
     }
 }
+function surrogateLow(ch) { return ch >= 0xDC00 && ch < 0xE000; }
+function surrogateHigh(ch) { return ch >= 0xD800 && ch < 0xDC00; }
 
 /**
 A fragment represents a node's collection of child nodes.
@@ -21435,7 +21445,8 @@ function addRange($start, $end, depth, target) {
         addNode($end.nodeBefore, target);
 }
 function close$1(node, content) {
-    node.type.checkContent(content);
+    if (!node.type.validContent(content))
+        throw new ReplaceError("Invalid content for node " + node.type.name);
     return node.copy(content);
 }
 function replaceThreeWay($from, $start, $end, $to, depth) {
@@ -22746,13 +22757,12 @@ function computeAttrs(attrs, value) {
     return built;
 }
 function checkAttrs(attrs, values, type, name) {
-    for (let name in values)
-        if (!(name in attrs))
-            throw new RangeError(`Unsupported attribute ${name} for ${type} of type ${name}`);
-    for (let name in attrs) {
-        let attr = attrs[name];
-        if (attr.validate)
-            attr.validate(values[name]);
+    for (let attr in values)
+        if (!(attr in attrs))
+            throw new RangeError(`Unsupported attribute ${attr} for ${type} of type ${name}`);
+    for (let attr in attrs) {
+        if (attrs[attr].validate)
+            attrs[attr].validate(values[attr]);
     }
 }
 function initAttrs(typeName, attrs) {
@@ -38840,6 +38850,7 @@ async function updateAndSave(md) {
     ast.attrs.snapshotPathCache
   );
 
+  /* eslint-disable max-len */
   let updatedMarkdown = `---------------
 decimalFormat: ${ast.attrs.decimalFormat}
 fontSize: ${ast.attrs.fontSize}
@@ -38849,6 +38860,7 @@ saveDate: ${new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60 
 ---------------
 
 ${savedPathData.body}`;
+  /* eslint-enable max-len */
 
   const pathDefText = stringifyMarkdownPathDefinitions(savedPathData.pathDefs);
   if (pathDefText.length > 0) {
@@ -38857,7 +38869,8 @@ ${savedPathData.body}`;
 
   // updateDoc.js cannot rebuild fallback data because it has no state.doc traversal.
   for (const snapshot of savedPathData.snapshots) {
-    updatedMarkdown += `\n\n<!--SNAPSHOT-->\ndate: ${snapshot.date}\nmessage: ${snapshot.message}\n\n`;
+    updatedMarkdown +=
+      `\n\n<!--SNAPSHOT-->\ndate: ${snapshot.date}\nmessage: ${snapshot.message}\n\n`;
     updatedMarkdown += snapshot.content;
   }
 
@@ -38894,7 +38907,7 @@ var hurmet = {
   updateCalculations,
   updateAndSave,
   Rnl,
-  version: "0.1.0"
+  version: "0.1.1"
 };
 
 module.exports = hurmet;
