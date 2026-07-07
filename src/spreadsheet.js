@@ -1,6 +1,7 @@
 /* eslint-disable no-alert */
 import { dt, allZeros } from "./constants"
 import { hurmetMarkdownSerializer } from "./to_markdown"
+import { md2ast } from "./md2ast"
 import { md2text, md2html } from "./md2html"
 import { unitFromUnitName } from "./units"
 import { parse } from "./parser"
@@ -272,9 +273,9 @@ export const sheetToTable = (state, tableNode) => {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i].content;
     for (let j = 0; j < row.length; j++) {
-      const text = row[j].content[0].attrs.entry
-      if (text.length > 0) {
-        row[j].content = [{ type: "paragraph", content: [{ type: "text", text }] }]
+      const entry = row[j].content[0].attrs.entry
+      if (entry.length > 0) {
+        row[j].content = md2ast(entry)
       } else {
         row[j].content = [{ type: "paragraph", content: [] }]
       }
