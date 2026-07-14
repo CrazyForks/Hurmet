@@ -26216,7 +26216,7 @@ const linearSearchForOverflow = (textNode, yMax, offset) => {
 };
 
 const unsplittableClasses = ["hurmet-calc", "hurmet-tex"];
-const unsplittableTags = ["IMG", "FIGCAPTION", "BR", "FOOTNOTE"];
+const unsplittableTags = ["IMG", "SVG", "FIGCAPTION", "BR", "FOOTNOTE"];
 
 const findParagraphOverflowPoint = (paragraph, yMax) => {
   // Find the page break inside the <p> or <code>.
@@ -26249,7 +26249,10 @@ const findParagraphOverflowPoint = (paragraph, yMax) => {
     } else {
       // The child node is a tagged element. Find out if it can be split.
       if (unsplittableClasses.includes(grafChild.className) ||
-          unsplittableTags.includes(grafChild.tagName)) {
+          unsplittableTags.includes(grafChild.tagName.toUpperCase()) ||
+          // Check for a Hurmet drawing. It will be a span with a SVG child.
+          (grafChild.tagName.toUpperCase() === "SPAN" && grafChild.childNodes.length === 1 &&
+            unsplittableTags.includes(grafChild.childNodes[0].tagName.toUpperCase()))) {
         if (i === 0) {
           return [-1, 0]
         } else {
